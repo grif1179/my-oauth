@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, \
+from flask import Flask, render_template, \
                   redirect, request, url_for
 import requests
 import json
@@ -7,19 +7,22 @@ from urllib.parse import urlencode, quote
 from uuid import uuid4
 
 app = Flask(__name__, 
-            static_folder='./static',
-            template_folder='./templates')
+            static_folder='./static/client',
+            template_folder='./templates/client')
 
 authServer = {
     'authorizationEndpoint': 'http://localhost:9001/authorize',
-    'tokenEndpoint': 'http://localhost:9001/token'
+    'tokenEndpoint': 'http://localhost:9001/token',
+    'revocationEndpoint': 'http://localhost:9001/revoke',
+    'registrationEndpoint': 'http://localhost:9001/register',
+    'userInfoEndpoint': 'http://localhost:9001/userinfo' 
 }
 
 client = {
     "client_id": "oauth-client-1",
     "client_secret": "oauth-client-secret-1",
     "redirect_uris": ["http://localhost:9000/callback"],
-    "scope": "foo"
+    "scope": ""
 }
 
 protectedResource = 'http://localhost:9002/resource'
@@ -40,6 +43,7 @@ def authorize():
     global access_token, scope, state
 
     access_token = None
+    refresh_token = None
     scope = None
 
     state = str(uuid4())
@@ -72,6 +76,8 @@ def callback():
     if request.args['state'] != state:
         print(f"State DOES NOT MATCH: expected {state} got {request.args['state']}")
         return render_template('error.html', error="State value did not match")
+
+    print(f"State value matches: expected {state} got {request.args['state']}")
 
     code = request.args['code']
     form_data = {
@@ -164,7 +170,8 @@ def fetch_resource():
     print(f"Making request with access token {access_token}")
 
     headers = {
-        'Authorization': f"Bearer {access_token}"
+        'Authorization': f"Bearer {access_token}",
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
     resource = requests.post(protectedResource, headers=headers)
     status_code = resource.status_code

@@ -5,6 +5,7 @@ var randomstring = require("randomstring");
 var cons = require('consolidate');
 var nosql = require('nosql').load('database.nosql');
 var querystring = require('querystring');
+var qs = require("qs");
 var __ = require('underscore');
 __.string = require('underscore.string');
 
@@ -30,7 +31,7 @@ var clients = [
 		"client_id": "oauth-client-1",
 		"client_secret": "oauth-client-secret-1",
 		"redirect_uris": ["http://localhost:9000/callback"],
-		"scope": "foo bar"
+		"scope": ""
 	}
 ];
 
@@ -40,6 +41,39 @@ var requests = {};
 
 var getClient = function(clientId) {
 	return __.find(clients, function(client) { return client.client_id == clientId; });
+};
+
+var getUser = function(username) {
+	return __.find(userInfo, function (user, key) { return user.username == username; });
+};
+
+var userInfo = {
+
+	"alice": {
+		"sub": "9XE3-JI34-00132A",
+		"preferred_username": "alice",
+		"name": "Alice",
+		"email": "alice.wonderland@example.com",
+		"email_verified": true
+	},
+	
+	"bob": {
+		"sub": "1ZT5-OE63-57383B",
+		"preferred_username": "bob",
+		"name": "Bob",
+		"email": "bob.loblob@example.net",
+		"email_verified": false
+	},
+
+	"carol": {
+		"sub": "F5Q1-L6LGG-959FS",
+		"preferred_username": "carol",
+		"name": "Carol",
+		"email": "carol.lewis@example.net",
+		"email_verified": true,
+		"username" : "clewis",
+		"password" : "user password!"
+ 	}	
 };
 
 app.get('/', function(req, res) {
@@ -125,6 +159,43 @@ app.post('/approve', function(req, res) {
 			urlParsed.query.state = query.state; 
 			res.redirect(url.format(urlParsed));
 			return;
+		} else if(query.response_type == 'token') {
+
+			var user = req.body.user;
+		
+			var scope = __.filter(__.keys(req.body), function(s) { return __.string.startsWith(s, 'scope_'); })
+				.map(function(s) { return s.slice('scope_'.length); });
+			var client = getClient(query.client_id);
+			var cscope = client.scope ? client.scope.split(' ') : undefined;
+			if (__.difference(scope, cscope).length > 0) {
+				// client asked for a scope it couldn't have
+				var urlParsed = url.parse(query.redirect_uri);
+				delete urlParsed.search; // this is a weird behavior of the URL library
+				urlParsed.query = urlParsed.query || {};
+				urlParsed.query.error = 'invalid_scope';
+				res.redirect(url.format(urlParsed));
+				return;
+			}
+
+			var user = userInfo[user];
+			if (!user) {		
+				console.log('Unknown user %s', user)
+				res.status(500).render('error', {error: 'Unknown user ' + user});
+				return;
+			}
+
+			console.log("User %j", user);
+
+			var token_response = generateTokens(req, res, query.clientId, user, cscope);		
+
+			var urlParsed = url.parse(query.redirect_uri);
+			delete urlParsed.search; // this is a weird behavior of the URL library
+			if (query.state) {
+				token_response.state = query.state;
+			} 				
+			urlParsed.hash = qs.stringify(token_response);
+			res.redirect(url.format(urlParsed));
+			return;
 		} else {
 			// we got a response type we don't understand
 			var urlParsed =url.parse(query.redirect_uri);
@@ -145,6 +216,37 @@ app.post('/approve', function(req, res) {
 	}
 	
 });
+
+var generateTokens = function (req, res, clientId, user, scope, nonce, generateRefreshToken) {
+	var access_token = randomstring.generate();
+
+	var refresh_token = null;
+
+	if (generateRefreshToken) {
+		refresh_token = randomstring.generate();	
+	}	
+
+	nosql.insert({ access_token: access_token, client_id: clientId, scope: scope, user: user });
+
+	if (refresh_token) {
+		nosql.insert({ refresh_token: refresh_token, client_id: clientId, scope: scope, user: user });
+	}
+	
+	console.log('Issuing access token %s', access_token);
+	if (refresh_token) {
+		console.log('and refresh token %s', refresh_token);
+	}
+	console.log('with scope %s', access_token, scope);
+
+	var cscope = null;
+	if (scope) {
+		cscope = scope.join(' ')
+	}
+
+	var token_response = { access_token: access_token, token_type: 'Bearer',  refresh_token: refresh_token, scope: cscope };
+
+	return token_response;
+};
 
 app.post("/token", function(req, res){
 	
@@ -190,22 +292,9 @@ app.post("/token", function(req, res){
 			delete codes[req.body.code]; // burn our code, it's been used
 			if (code.authorizationEndpointRequest.client_id == clientId) {
 
-				var access_token = randomstring.generate();
-				var refresh_token = randomstring.generate();
+				var user = userInfo[code.user];
 
-				var cscope = null;
-				if (code.scope) {
-					cscope = code.scope.join(' ')
-				}
-
-				nosql.insert({ access_token: access_token, refresh_token: refresh_token, 
-							   client_id: clientId, scope: cscope });
-
-				console.log('Issuing access token %s', access_token);
-				console.log('Issuing refresh token %s', refresh_token);
-				console.log('with scope %s', cscope);
-
-				var token_response = { access_token: access_token, refresh_token: refresh_token, token_type: 'Bearer',  scope: cscope };
+				var token_response = generateTokens(req, res, clientId, user, code.scope, code.authorizationEndpointRequest.nonce, true);
 
 				res.status(200).json(token_response);
 				console.log('Issued tokens for code %s', req.body.code);
@@ -221,32 +310,71 @@ app.post("/token", function(req, res){
 			res.status(400).json({error: 'invalid_grant'});
 			return;
 		}
+	} else if (req.body.grant_type == 'client_credentials') {
+		var scope = req.body.scope ? req.body.scope.split(' ') : undefined;
+		var client = getClient(query.client_id);
+		var cscope = client.scope ? client.scope.split(' ') : undefined;
+		if (__.difference(scope, cscope).length > 0) {
+			// client asked for a scope it couldn't have
+			res.status(400).json({error: 'invalid_scope'});
+			return;
+		}
+
+		var access_token = randomstring.generate();
+		var token_response = { access_token: access_token, token_type: 'Bearer', scope: scope.join(' ') };
+		nosql.insert({ access_token: access_token, client_id: clientId, scope: scope });
+		console.log('Issuing access token %s', access_token);
+		res.status(200).json(token_response);
+		return;	
+		
 	} else if (req.body.grant_type == 'refresh_token') {
-		nosql.find().make(function (builder) {
-			builder.where('refresh_token', req.body.refresh_token);
-			builder.callback(function (err, tokens) {
-				if (tokens.length == 1) {
-					var token = tokens[0];
-					if (token.client_id != clientId) {
-						console.log('Invalid client using a refresh token, expected %s got %s', token.client_id, clientId);
-						nosql.remove().make(function (builder) { builder.where('refresh_token', req.body.refresh_token); });
-						res.status(400).end();
-						return
-					}
-					console.log("We found a matching refresh token: %s", req.body.refresh_token);
-					let cscope = token.scope;
-					var access_token = randomstring.generate();
-					var token_response = { access_token: access_token, token_type: 'Bearer', refresh_token: req.body.refresh_token, scope: cscope };
-					nosql.insert({ access_token: access_token, client_id: clientId, scope: cscope });
-					console.log('Issuing access token %s for refresh token %s', access_token, req.body.refresh_token);
-					res.status(200).json(token_response);
-					return;
-				} else {
-					console.log('No matching token was found.');
-					res.status(401).end();
+	nosql.find().make(function(builder) {
+	  builder.where('refresh_token', req.body.refresh_token);
+	  builder.callback(function(err, tokens) {
+			if (tokens.length == 1) {
+				var token = tokens[0];
+				if (token.client_id != clientId) {
+					console.log('Invalid client using a refresh token, expected %s got %s', token.client_id, clientId);
+					nosql.remove().make(function(builder) { builder.where('refresh_token', req.body.refresh_token); });
+					res.status(400).end();
+					return
 				}
-			})
-		});	
+				console.log("We found a matching token: %s", req.body.refresh_token);
+				var access_token = randomstring.generate();
+				var token_response = { access_token: access_token, token_type: 'Bearer',  refresh_token: req.body.refresh_token };
+				nosql.insert({ access_token: access_token, client_id: clientId });
+				console.log('Issuing access token %s for refresh token %s', access_token, req.body.refresh_token);
+				res.status(200).json(token_response);
+				return;
+			} else {
+				console.log('No matching token was found.');
+				res.status(401).end();
+			}
+	  })
+	});
+	} else if (req.body.grant_type == 'password') {
+		var username = req.body.username;
+		var user = getUser(username);
+		if (!user) {
+			console.log('Unknown user %s', user);
+			res.status(401).json({error: 'invalid_grant'});
+			return;
+		}
+		console.log("user is %j ", user)
+		
+		var password = req.body.password;
+		if (user.password != password) {
+			console.log('Mismatched resource owner password, expected %s got %s', user.password, password);
+			res.status(401).json({error: 'invalid_grant'});
+			return;
+		}
+
+		var scope = req.body.scope;
+
+		var token_response = generateTokens(req, res, clientId, user, scope);
+		
+		res.status(200).json(token_response);		
+		return;
 	} else {
 		console.log('Unknown grant type %s', req.body.grant_type);
 		res.status(400).json({error: 'unsupported_grant_type'});
