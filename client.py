@@ -57,9 +57,13 @@ def encodeClientCreds(id, secret):
 
 @app.route('/callback')
 def callback():
-    print('callback')
     if 'error' in request.args:
+        return render_template('error.html', error=request.args['error'])
+
+    if request.args['state'] != state:
+        print(f"State DOES NOT MATCH: expected {state} got {request.args['state']}")
         return render_template('error.html', error="State value did not match")
+
     code = request.args['code']
     form_data = {
         'grant_type': 'authorization_code',
@@ -92,15 +96,30 @@ def callback():
         return render_template('error.html', error=error_msg)
 
 
-
 @app.route('/fetch_resource')
 def fetch_resource():
-    pass
+    global access_token
+    if not access_token:
+        return render_template('error', error='Missing Access Token')
+    
+    print(f"Making request with access token {access_token}")
+
+    headers = {
+        'Authorization': f"Bearer {access_token}"
+    }
+    resource = requests.post(protectedResource, headers=headers)
+    status_code = resource.status_code
+    if status_code >= 200 and status_code < 300:
+        body = json.loads(resource.content)
+        print(f"Resource Body: {body}")
+        return render_template('data.html', resource=body)
+    else:
+        access_token = None
+        return render_template('error.html', error=resource.status_code)
 
 
 def buildUrl(base, options, hash=""):
     return f"{base}?{urlencode(options)}"
-
 
 
 app.run(port=9000, debug=True)
