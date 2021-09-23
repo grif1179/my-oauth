@@ -24,14 +24,15 @@ client = {
 
 protectedResource = 'http://localhost:9002/resource'
 
-access_token = '987tghjkiu6trfghjuytrghj';
-refresh_token = 'j2r3oj32r23rmasd98uhjrk2o3i';
+access_token = None
+refresh_token = None
 state = None
 scope = None
 
 @app.route('/')
 def index():
-    return render_template('index.html', access_token=access_token, scope=scope)
+    return render_template('index.html', access_token=access_token, 
+                            refresh_token=refresh_token, scope=scope)
 
 
 @app.route('/authorize')
@@ -50,6 +51,7 @@ def authorize():
         'response_type': 'code',
         'client_id': client['client_id'],
         'redirect_uri': client['redirect_uris'][0],
+        'scope': client['scope'],
         'state': state
     }
     authUrl = buildUrl(authServer['authorizationEndpoint'], query_items)

@@ -191,18 +191,21 @@ app.post("/token", function(req, res){
 			if (code.authorizationEndpointRequest.client_id == clientId) {
 
 				var access_token = randomstring.generate();
+				var refresh_token = randomstring.generate();
 
 				var cscope = null;
 				if (code.scope) {
 					cscope = code.scope.join(' ')
 				}
 
-				nosql.insert({ access_token: access_token, client_id: clientId, scope: cscope });
+				nosql.insert({ access_token: access_token, refresh_token: refresh_token, 
+							   client_id: clientId, scope: cscope });
 
 				console.log('Issuing access token %s', access_token);
+				console.log('Issuing refresh token %s', refresh_token);
 				console.log('with scope %s', cscope);
 
-				var token_response = { access_token: access_token, token_type: 'Bearer',  scope: cscope };
+				var token_response = { access_token: access_token, refresh_token: refresh_token, token_type: 'Bearer',  scope: cscope };
 
 				res.status(200).json(token_response);
 				console.log('Issued tokens for code %s', req.body.code);
@@ -254,8 +257,6 @@ app.use('/', express.static('files/authorizationServer'));
 
 // clear the database on startup
 nosql.clear();
-// inject our pre-baked refresh token
-setTimeout(() => nosql.insert({ refresh_token: 'j2r3oj32r23rmasd98uhjrk2o3i', client_id: 'oauth-client-1', scope: 'foo bar' }), 5000);
 
 var server = app.listen(9001, 'localhost', function () {
   var host = server.address().address;
