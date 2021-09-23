@@ -1,5 +1,6 @@
 from flask import Flask, render_template, jsonify, redirect, request
 import requests
+import json
 import base64
 from urllib.parse import urlencode, quote
 from uuid import uuid4
@@ -51,7 +52,7 @@ def authorize():
 
 def encodeClientCreds(id, secret):
     base_str = f"{id}:{secret}"
-    return base64.b64encode(bytes(base_str, 'utf-8'))
+    return base64.b64encode(bytes(base_str, 'utf-8')).decode('utf-8')
 
 
 @app.route('/callback')
@@ -77,11 +78,9 @@ def callback():
 
     print(f"Requesting access token for code {code}")
 
-    import pdb; pdb.set_trace()
-
     status_code = token_request.status_code
     if status_code >= 200 and status_code < 300:
-        body = token_request.content
+        body = json.loads(token_request.content)
         print(f"Request Body: {body}")
         global access_token
         access_token = body['access_token']
