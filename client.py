@@ -1,4 +1,5 @@
-from flask import Flask, render_template, jsonify, redirect, request
+from flask import Flask, render_template, jsonify, \
+                  redirect, request, url_for
 import requests
 import json
 import base64
@@ -17,13 +18,15 @@ authServer = {
 client = {
     "client_id": "oauth-client-1",
     "client_secret": "oauth-client-secret-1",
-    "redirect_uris": ["http://localhost:9000/callback"]
+    "redirect_uris": ["http://localhost:9000/callback"],
+    "scope": "foo"
 }
 
 protectedResource = 'http://localhost:9002/resource'
 
+access_token = '987tghjkiu6trfghjuytrghj';
+refresh_token = 'j2r3oj32r23rmasd98uhjrk2o3i';
 state = None
-access_token = None
 scope = None
 
 @app.route('/')
@@ -33,7 +36,11 @@ def index():
 
 @app.route('/authorize')
 def authorize():
-    global access_token
+    global access_token, scope, state
+
+    access_token = None
+    scope = None
+
     state = str(uuid4())
 
     redirect_uri = client['redirect_uris'][0]
@@ -86,13 +93,63 @@ def callback():
     if status_code >= 200 and status_code < 300:
         body = json.loads(token_request.content)
         print(f"Request Body: {body}")
-        global access_token
+
+        global access_token, refresh_token, scope
+
         access_token = body['access_token']
         print(f"access_token: {access_token}")
 
-        return render_template('index.html', access_token=access_token, scope=scope)
+        if 'refresh_token' in body:
+            refresh_token = body['refresh_token']
+            print(f"Go refresh token: {refresh_token}")
+
+        scope = body['scope']
+        print(f"Got scope: {scope}")
+
+        return render_template('index.html', access_token=access_token, 
+                               refresh_token=refresh_token, scope=scope)
     else:
         error_msg = f"Unable to fetch access token, server response: {status_code}"
+        return render_template('error.html', error=error_msg)
+
+
+def refresh_access_token(req):
+    global access_token, refresh_token, scope
+
+    form_data = {
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token
+    }
+
+    encoded_str = encodeClientCreds(client['client_id'], client['client_secret'])
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': f"Basic {encoded_str}"
+    }
+
+    token_request = requests.post(authServer['tokenEndpoint'], 
+                                  data=form_data,
+                                  headers=headers)
+
+    status_code = token_request.status_code
+    if status_code >= 200 and status_code < 300:
+        body = json.loads(token_request.content)
+        print(f"Request Body: {body}")
+
+
+        access_token = body['access_token']
+        print(f"access_token: {access_token}")
+
+        if 'refresh_token' in body:
+            refresh_token = body['refresh_token']
+            print(f"Got refresh token: {refresh_token}")
+
+        scope = body['scope']
+        print(f"Got scope: {scope}")
+
+        return redirect('/fetch_resource')
+    else:
+        error_msg = f"Unable to refresh token."
         return render_template('error.html', error=error_msg)
 
 
@@ -115,7 +172,11 @@ def fetch_resource():
         return render_template('data.html', resource=body)
     else:
         access_token = None
-        return render_template('error.html', error=resource.status_code)
+        if refresh_token:
+            return refresh_access_token(request)
+        else:
+            return render_template('error.html', error=resource.status_code)
+
 
 
 def buildUrl(base, options, hash=""):
